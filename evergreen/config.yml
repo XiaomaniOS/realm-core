@@ -68,6 +68,12 @@ tasks:
                     -j ${max_jobs|$(grep -c proc /proc/cpuinfo)}
         fi
 
+        if [ -n "${run_tests_against_baas|}" ]; then
+            set_cmake_var baas_vars REALM_ENABLE_AUTH_TESTS BOOL On
+            set_cmake_var baas_vars REALM_MONGODB_ENDPOINT STRING "http://localhost:9090"
+            set_cmake_var baas_vars REALM_STITCH_CONFIG PATH $(pwd)/test/object-store/mongodb/stitch.json
+        fi
+
         set_cmake_var realm_vars REALM_BUILD_COMMANDLINE_TOOLS BOOL On
         set_cmake_var realm_vars REALM_ENABLE_SYNC BOOL On
         set_cmake_var realm_vars REALM_ENABLE_ENCRYPTION BOOL On
@@ -113,7 +119,7 @@ tasks:
       local_file: 'realm-core/build/realm-core-artifacts-runtime.tar.gz'
       content_type: '${content_type|application/x-gzip}'
 
-- name: test
+- name: core-tests
   depends_on:
   - "compile"
   commands:
@@ -122,10 +128,50 @@ tasks:
       working_dir: realm-core
       script: |-
         set -o errexit
-        ctest=$(pwd)/${cmake_bindir}/ctest
 
-        cd build
-        $ctest -V ${test_flags|}
+        ./build/test/realm-tests
+
+- name: sync-tests
+  depends_on:
+  - "compile"
+  commands:
+  - command: shell.exec
+    params:
+      working_dir: realm-core
+      script: |-
+        set -o errexit
+
+        ./build/test/realm-sync-tests
+
+- name: object-store-tests
+  depends_on:
+  - "compile"
+  commands:
+  - command: shell.exec
+    params:
+      working_dir: realm-core
+      shell: bash
+      script: |-
+        set -o errexit
+        set -o pipefail
+
+        export CURL=${curl|curl}
+
+        if [[ -n "${run_tests_against_baas|}" ]]; then
+            ./evergreen/install_baas.sh ./baas-work-dir ./test/object-store/mongodb
+
+            ./evergreen/run_baas.sh ./baas-work-dir &
+            echo $! > run_baas.pid
+
+            # wait for baas to start
+            ./evergreen/wait_for_baas.sh run_baas.pid
+        fi
+
+        ./build/test/object-store/realm-object-store-tests
+
+        if [[ -f $BAAS_PID ]]; then
+            kill $(< run_baas.pid)
+        fi
 
 - name: lint
   commands:
@@ -153,10 +199,11 @@ task_groups:
   - func: "fetch cmake binaries"
   tasks:
   - compile
-  - test
+  - core-tests
+  - sync-tests
+  - object-store-tests
   - package
  
-# NOTE: When adding a new variant, update the "upload-all" task.
 buildvariants:
 - name: ubuntu2004
   display_name: "Ubuntu 20.04"
@@ -165,6 +212,7 @@ buildvariants:
     cmake_url: "https://github.com/Kitware/CMake/releases/download/v3.18.2/cmake-3.18.2-Linux-x86_64.tar.gz"
     cmake_bindir: "./cmake_binaries/bin"
     build_libuv: On
+    run_tests_against_baas: On
   tasks:
   - name: compile_test_and_package
     distros:
@@ -178,7 +226,9 @@ buildvariants:
     cxx_compiler: /opt/mongodbtoolchain/v3/bin/g++
     cmake_url: "https://github.com/Kitware/CMake/releases/download/v3.18.2/cmake-3.18.2-Linux-x86_64.tar.gz"
     cmake_bindir: "./cmake_binaries/bin"
+    curl: "/opt/mongodbtoolchain/v3/bin/curl"
     build_libuv: On
+    run_tests_against_baas: On
   tasks:
   - name: compile_test_and_package
     distros:
@@ -202,6 +252,7 @@ buildvariants:
     cmake_url: "https://github.com/Kitware/CMake/releases/download/v3.18.2/cmake-3.18.2-Darwin-x86_64.tar.gz"
     cmake_bindir: "./cmake_binaries/CMake.app/Contents/bin"
     max_jobs: $(sysctl -n hw.logicalcpu)
+    run_tests_against_baas: On
   tasks:
   - name: compile_test_and_package
     distros:
