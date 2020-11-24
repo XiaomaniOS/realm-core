@@ -420,12 +420,20 @@ Query TrueOrFalseNode::visit(ParserDriver* drv)
 
 std::unique_ptr<Subexpr> PropNode::visit(ParserDriver* drv)
 {
-    std::unique_ptr<Subexpr> subexpr{path->visit(drv, comp_type).column(identifier)};
-
-    if (post_op) {
-        return post_op->visit(drv, subexpr.get());
+    if (identifier == "@link") {
+        // This is a backlink aggregate query
+        auto link_chain = path->visit(drv, comp_type);
+        auto sub = link_chain.get_backlink_count<Int>();
+        return sub.clone();
     }
-    return subexpr;
+    else {
+        std::unique_ptr<Subexpr> subexpr{path->visit(drv, comp_type).column(identifier)};
+
+        if (post_op) {
+            return post_op->visit(drv, subexpr.get());
+        }
+        return subexpr;
+    }
 }
 
 std::unique_ptr<Subexpr> PostOpNode::visit(ParserDriver*, Subexpr* subexpr)
